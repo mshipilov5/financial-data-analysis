@@ -1,0 +1,6 @@
+flask
+pandas
+numpy
+requests
+urllib3<2
+astral
