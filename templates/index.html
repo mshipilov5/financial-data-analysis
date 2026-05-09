@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Анализ Мосбиржи</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #f6f8fb; color: #1f2937; }
+    h1, h2 { margin-bottom: 8px; }
+    .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+    .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .metric { background: #f3f7ff; border-radius: 8px; padding: 12px; }
+    .metric .label { font-size: 12px; color: #4b5563; }
+    .metric .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+    form { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: end; }
+    input, button { width: 100%; padding: 8px; font-size: 14px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+    .error { color: #b91c1c; font-weight: 600; }
+    .muted { color: #6b7280; font-size: 14px; }
+    .filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .filter-group { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; background: #fafafa; max-height: 220px; overflow: auto; }
+    .filter-group h3 { margin: 0 0 8px 0; font-size: 14px; }
+    .filter-group label { display: block; margin-bottom: 4px; font-size: 13px; }
+    .chart { min-height: 320px; }
+  </style>
+</head>
+<body>
+  <h1>Анализ акций Мосбиржи (1-2 эшелон)</h1>
+  <p class="muted">Источник данных: MOEX ISS API + Open-Meteo. Расчеты выполнены в pandas.</p>
+
+  <div class="card">
+    <form method="get">
+      <input type="hidden" name="run" value="1">
+      <label>Дата начала
+        <input type="date" name="start" value="{{ params.start }}" required>
+      </label>
+      <label>Дата окончания
+        <input type="date" name="end" value="{{ params.end }}" required>
+      </label>
+      <label>Количество тикеров
+        <input type="number" min="5" max="20" name="max_tickers" value="{{ params.max_tickers }}" required>
+      </label>
+      <button type="submit">Пересчитать</button>
+    </form>
+  </div>
+
+  {% if error_message %}
+    <div class="card error">{{ error_message }}</div>
+  {% endif %}
+  {% if intro_message %}
+    <div class="card muted">{{ intro_message }}</div>
+  {% endif %}
+
+  {% if has_data %}
+    <div class="card">
+      <h2>Фильтры отображения</h2>
+      <div class="filters">
+        <div class="filter-group">
+          <h3>Тикеры</h3>
+          {% for item in ticker_options %}
+            <label><input type="checkbox" class="flt-ticker" value="{{ item }}" checked> {{ item }}</label>
+          {% endfor %}
+        </div>
+        <div class="filter-group">
+          <h3>Фазы Луны</h3>
+          {% for item in phase_options %}
+            <label><input type="checkbox" class="flt-phase" value="{{ item }}" checked> {{ item }}</label>
+          {% endfor %}
+        </div>
+        <div class="filter-group">
+          <h3>Температура</h3>
+          {% for item in temp_options %}
+            <label><input type="checkbox" class="flt-temp" value="{{ item }}" checked> {{ item }}</label>
+          {% endfor %}
+        </div>
+        <div class="filter-group">
+          <h3>Осадки</h3>
+          {% for item in rain_options %}
+            <label><input type="checkbox" class="flt-rain" value="{{ item }}" checked> {{ item }}</label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div class="metric"><div class="label">Наблюдений</div><div class="value">{{ metrics.observations }}</div></div>
+        <div class="metric"><div class="label">Средняя дневная доходность</div><div class="value">{{ metrics.mean }}</div></div>
+        <div class="metric"><div class="label">Медиана дневной доходности</div><div class="value">{{ metrics.median }}</div></div>
+        <div class="metric"><div class="label">Сетевые сбои API</div><div class="value">{{ network_failures }}</div></div>
+      </div>
+      <p><strong>Выбранные тикеры:</strong> {{ tickers }}</p>
+    </div>
+
+    <div class="card">
+      <h2>1) Фазы Луны</h2>
+      <div id="chart-lunar" class="chart"></div>
+      <table id="lunar-table">
+        <thead><tr><th>Тикер</th><th>Фаза</th><th>Средняя доходность</th><th>Медиана</th><th>Наблюдений</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>2) Погода vs доходность</h2>
+      {% if weather_table %}
+        <div id="chart-weather" class="chart"></div>
+        <table id="weather-table">
+          <thead><tr><th>Тикер</th><th>Температура</th><th>Осадки</th><th>Средняя доходность</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      {% else %}
+        <p class="muted">Погодные данные недоступны для выбранного периода.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>3) Halloween effect по акциям</h2>
+      <div id="chart-halloween" class="chart"></div>
+      <table id="halloween-table">
+        <thead>
+          <tr>
+            <th>Тикер</th>
+            <th>Winter avg/day</th>
+            <th>Summer avg/day</th>
+            <th>Effect avg/day</th>
+            <th>Winter total</th>
+            <th>Summer total</th>
+            <th>Effect total</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  {% endif %}
+  {% if has_data %}
+  <script>
+    const lunarRaw = {{ lunar_raw | tojson }};
+    const weatherRaw = {{ weather_raw | tojson }};
+    const halloweenRaw = {{ halloween_raw | tojson }};
+
+    function checkedValues(selector) {
+      return Array.from(document.querySelectorAll(selector + ":checked")).map(x => x.value);
+    }
+
+    function pct(v, d=3) { return (v * 100).toFixed(d) + "%"; }
+
+    function renderTable(tableId, rows, cols) {
+      const tbody = document.querySelector("#" + tableId + " tbody");
+      tbody.innerHTML = "";
+      rows.forEach(row => {
+        const tr = document.createElement("tr");
+        cols.forEach(c => {
+          const td = document.createElement("td");
+          td.textContent = row[c];
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    function applyFilters() {
+      const t = new Set(checkedValues(".flt-ticker"));
+      const p = new Set(checkedValues(".flt-phase"));
+      const tr = new Set(checkedValues(".flt-temp"));
+      const rr = new Set(checkedValues(".flt-rain"));
+
+      const lunar = lunarRaw.filter(x => t.has(x.ticker) && p.has(x.phase)).map(x => ({
+        ticker: x.ticker,
+        phase: x.phase,
+        mean_return: pct(x.mean_return),
+        median_return: pct(x.median_return),
+        observations: x.observations
+      }));
+      renderTable("lunar-table", lunar, ["ticker", "phase", "mean_return", "median_return", "observations"]);
+
+      const weather = weatherRaw
+        .filter(x => t.has(x.ticker) && tr.has(String(x.temp_regime)) && rr.has(String(x.rain_regime)))
+        .map(x => ({
+          ticker: x.ticker,
+          temp_regime: x.temp_regime,
+          rain_regime: x.rain_regime,
+          avg_return: pct(x.avg_return),
+        }));
+      if (document.querySelector("#weather-table")) {
+        renderTable("weather-table", weather, ["ticker", "temp_regime", "rain_regime", "avg_return"]);
+      }
+
+      const halloween = halloweenRaw.filter(x => t.has(x.ticker)).map(x => ({
+        ticker: x.ticker,
+        winter_avg_daily_return: pct(x.winter_avg_daily_return),
+        summer_avg_daily_return: pct(x.summer_avg_daily_return),
+        avg_daily_return_diff: pct(x.avg_daily_return_diff),
+        winter_total_return: pct(x.winter_total_return),
+        summer_total_return: pct(x.summer_total_return),
+        total_return_diff: pct(x.total_return_diff),
+      }));
+      renderTable("halloween-table", halloween, [
+        "ticker",
+        "winter_avg_daily_return",
+        "summer_avg_daily_return",
+        "avg_daily_return_diff",
+        "winter_total_return",
+        "summer_total_return",
+        "total_return_diff",
+      ]);
+
+      const lunarChart = lunarRaw.filter(x => t.has(x.ticker) && p.has(x.phase));
+      Plotly.newPlot("chart-lunar", [{
+        type: "bar",
+        x: lunarChart.map(x => `${x.ticker} / ${x.phase}`),
+        y: lunarChart.map(x => x.mean_return),
+      }], { title: "Средняя доходность по фазам Луны (фильтр)" , yaxis: {tickformat: ".2%"}});
+
+      const halloweenChart = halloweenRaw.filter(x => t.has(x.ticker));
+      Plotly.newPlot("chart-halloween", [{
+        type: "bar",
+        x: halloweenChart.map(x => x.ticker),
+        y: halloweenChart.map(x => x.total_return_diff),
+      }], { title: "Halloween effect total (Winter - Summer)", yaxis: {tickformat: ".2%"}});
+
+      if (weatherRaw.length) {
+        const weatherChart = weatherRaw.filter(
+          x => t.has(x.ticker) && tr.has(String(x.temp_regime)) && rr.has(String(x.rain_regime))
+        );
+        Plotly.newPlot("chart-weather", [{
+          type: "bar",
+          x: weatherChart.map(x => `${x.ticker} / ${x.temp_regime} / ${x.rain_regime}`),
+          y: weatherChart.map(x => x.avg_return),
+        }], { title: "Доходность по погодным режимам (фильтр)", yaxis: {tickformat: ".2%"}});
+      }
+    }
+
+    document.querySelectorAll(".flt-ticker, .flt-phase, .flt-temp, .flt-rain")
+      .forEach(el => el.addEventListener("change", applyFilters));
+    applyFilters();
+  </script>
+  {% endif %}
+</body>
+</html>
