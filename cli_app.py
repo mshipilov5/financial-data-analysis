@@ -6,7 +6,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from analysis_core import run_analysis
+from analysis_core import METRIC_LABELS, AnalysisMetric, parse_analysis_metric, run_analysis
 
 logger = logging.getLogger("moex_cli")
 
@@ -30,6 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end", default=today.isoformat(), help="Дата конца YYYY-MM-DD")
     parser.add_argument("--max-tickers", type=int, default=10, help="Количество тикеров (5-20)")
     parser.add_argument("--output-dir", default="output", help="Папка для CSV-отчетов")
+    parser.add_argument(
+        "--metric",
+        default=AnalysisMetric.RETURN.value,
+        choices=[m.value for m in AnalysisMetric],
+        help="Параметр анализа: return (доходность), volatility (волатильность), volume (объём)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Включить DEBUG-логи")
     return parser.parse_args()
 
@@ -50,10 +56,23 @@ def main() -> int:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("Start analysis: %s -> %s", start, end)
+    try:
+        metric = parse_analysis_metric(args.metric)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+
+    logger.info(
+        "Start analysis: %s -> %s (%s)",
+        start,
+        end,
+        METRIC_LABELS[metric],
+    )
 
     try:
-        result = run_analysis(start=start, end=end, max_tickers=args.max_tickers, logger=logger)
+        result = run_analysis(
+            start=start, end=end, max_tickers=args.max_tickers, metric=metric, logger=logger
+        )
     except Exception as exc:  # noqa: BLE001
         logger.error("Analysis failed: %s", exc)
         return 1
@@ -70,8 +89,12 @@ def main() -> int:
 
     logger.info("Selected tickers: %s", ", ".join(result.tickers))
     logger.info("Observations: %s", len(result.returns_df))
-    logger.info("Mean daily return: %.3f%%", result.returns_df["daily_return"].mean() * 100)
-    logger.info("Median daily return: %.3f%%", result.returns_df["daily_return"].median() * 100)
+    if metric == AnalysisMetric.VOLUME:
+        logger.info("Mean daily volume: %.0f", result.returns_df["metric"].mean())
+        logger.info("Median daily volume: %.0f", result.returns_df["metric"].median())
+    else:
+        logger.info("Mean: %.3f%%", result.returns_df["metric"].mean() * 100)
+        logger.info("Median: %.3f%%", result.returns_df["metric"].median() * 100)
     logger.info("Network failures while loading candles: %s", result.network_failures)
     logger.info("Saved: %s, %s, %s, %s", returns_path, lunar_path, weather_path, halloween_path)
 
