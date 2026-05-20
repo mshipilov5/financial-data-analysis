@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -22,7 +22,7 @@ class PermutationTestResult:
 def _safe_float(value: float | int | np.floating | np.integer) -> float:
     try:
         return float(value)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return float("nan")
 
 
@@ -92,13 +92,6 @@ def aggregate_by_group_equal_weight(
     metric_col: str = "metric",
     ticker_col: str = "ticker",
 ) -> pd.DataFrame:
-    """Equal-weight aggregation: each ticker contributes equally.
-
-    Steps:
-    1) mean(metric) within each (ticker, group)
-    2) average those means across tickers for each group
-    """
-
     if df.empty:
         return pd.DataFrame(columns=[group_col, "mean", "tickers"])
 
@@ -122,13 +115,6 @@ def build_lunar_effect_summary(
     metric: AnalysisMetric,
     mode: str = "equal_weight",
 ) -> Dict[str, object]:
-    """Return a dict suitable for passing into Jinja and JS.
-
-    Produces:
-    - per_phase table: mean, ci_low, ci_high, obs
-    - best/worst phase and permutation p-value for best-worst diff (pooled)
-    """
-
     if returns_df.empty:
         return {
             "mode": mode,
@@ -143,9 +129,6 @@ def build_lunar_effect_summary(
     frame["phase"] = pd.Categorical(frame["phase"].astype(str), categories=PHASE_ORDER, ordered=True)
 
     if mode == "equal_weight":
-        agg = aggregate_by_group_equal_weight(frame, group_col="phase", metric_col="metric")
-        agg = agg.rename(columns={"tickers": "observations"})
-        # CIs: bootstrap across tickers means per phase
         per_ticker = (
             frame.groupby(["ticker", "phase"], as_index=False)["metric"].mean().rename(columns={"metric": "x"})
         )
@@ -179,7 +162,6 @@ def build_lunar_effect_summary(
                 }
             )
 
-    # Best/worst by mean
     valid_rows = [r for r in rows if not math.isnan(_safe_float(r["mean"]))]
     best_phase = ""
     worst_phase = ""
@@ -192,8 +174,6 @@ def build_lunar_effect_summary(
         best_phase = str(best["phase"])
         worst_phase = str(worst["phase"])
         best_minus_worst = _safe_float(best["mean"]) - _safe_float(worst["mean"])
-
-        # Permutation test always pooled on daily observations (simple and explainable)
         a = frame.loc[frame["phase"] == best_phase, "metric"].astype(float).to_numpy()
         b = frame.loc[frame["phase"] == worst_phase, "metric"].astype(float).to_numpy()
         test = permutation_test_diff_means(a, b)
@@ -207,4 +187,185 @@ def build_lunar_effect_summary(
         "worst_phase": worst_phase,
         "best_minus_worst": best_minus_worst,
         "p_value": p_value,
+    }
+
+
+def build_halloween_effect_summary(
+    returns_df: pd.DataFrame,
+    halloween_by_ticker: pd.DataFrame,
+    metric: AnalysisMetric,
+) -> Dict[str, object]:
+    if returns_df.empty:
+        return {
+            "winter_mean": float("nan"),
+            "summer_mean": float("nan"),
+            "winter_minus_summer": float("nan"),
+            "p_value": float("nan"),
+            "tickers_total": 0,
+            "tickers_winter_better": 0,
+            "share_winter_better": float("nan"),
+            "by_ticker": [],
+            "metric": metric.value,
+        }
+
+    frame = returns_df.dropna(subset=["date", "metric"]).copy()
+    month = pd.to_datetime(frame["date"]).dt.month
+    frame["season"] = np.where(
+        month.isin([11, 12, 1, 2, 3, 4]),
+        "Winter (Nov-Apr)",
+        "Summer (May-Oct)",
+    )
+
+    winter = frame.loc[frame["season"] == "Winter (Nov-Apr)", "metric"].astype(float).to_numpy()
+    summer = frame.loc[frame["season"] == "Summer (May-Oct)", "metric"].astype(float).to_numpy()
+    winter_mean = _safe_float(np.nanmean(winter))
+    summer_mean = _safe_float(np.nanmean(summer))
+    test = permutation_test_diff_means(winter, summer)
+
+    by_ticker_df = halloween_by_ticker.copy()
+    by_ticker_df = by_ticker_df.dropna(subset=["ticker", "avg_daily_return_diff"])
+    by_ticker_df = by_ticker_df.sort_values("ticker")
+    tickers_total = int(len(by_ticker_df))
+    tickers_winter_better = int((by_ticker_df["avg_daily_return_diff"] > 0).sum()) if tickers_total else 0
+    share_winter_better = (
+        _safe_float(tickers_winter_better / tickers_total) if tickers_total else float("nan")
+    )
+
+    return {
+        "winter_mean": winter_mean,
+        "summer_mean": summer_mean,
+        "winter_minus_summer": winter_mean - summer_mean,
+        "p_value": test.p_value,
+        "tickers_total": tickers_total,
+        "tickers_winter_better": tickers_winter_better,
+        "share_winter_better": share_winter_better,
+        "by_ticker": [
+            {
+                "ticker": str(row["ticker"]),
+                "avg_daily_return_diff": _safe_float(row["avg_daily_return_diff"]),
+                "total_return_diff": _safe_float(row["total_return_diff"]),
+            }
+            for _, row in by_ticker_df.iterrows()
+        ],
+        "metric": metric.value,
+    }
+
+
+def _build_weather_regimes(frame: pd.DataFrame) -> pd.DataFrame:
+    temp_order = ["Холодно", "Умеренно", "Тепло"]
+    rain_order = ["Сухо", "Средне", "Дождливо"]
+    valid = frame.dropna(subset=["temperature_2m_mean", "precipitation_sum", "metric"]).copy()
+    if valid.empty:
+        return valid
+    temp_q = valid["temperature_2m_mean"].quantile([0.33, 0.66]).tolist()
+    rain_q = valid["precipitation_sum"].quantile([0.33, 0.66]).tolist()
+    valid["temp_regime"] = pd.cut(
+        valid["temperature_2m_mean"],
+        bins=[-np.inf, temp_q[0], temp_q[1], np.inf],
+        labels=temp_order,
+    )
+    valid["rain_regime"] = pd.cut(
+        valid["precipitation_sum"],
+        bins=[-np.inf, rain_q[0], rain_q[1], np.inf],
+        labels=rain_order,
+    )
+    valid["temp_regime"] = valid["temp_regime"].astype(str)
+    valid["rain_regime"] = valid["rain_regime"].astype(str)
+    return valid
+
+
+def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetric) -> Dict[str, object]:
+    temp_order = ["Холодно", "Умеренно", "Тепло"]
+    rain_order = ["Сухо", "Средне", "Дождливо"]
+    valid = _build_weather_regimes(returns_df)
+    if valid.empty:
+        return {
+            "available": False,
+            "temp_order": temp_order,
+            "rain_order": rain_order,
+            "cells": [],
+            "heatmap": [],
+            "best_regime": "",
+            "worst_regime": "",
+            "best_minus_worst": float("nan"),
+            "p_value": float("nan"),
+            "metric": metric.value,
+        }
+
+    grouped = (
+        valid.groupby(["temp_regime", "rain_regime"], as_index=False)["metric"]
+        .agg(["mean", "count"])
+        .reset_index()
+        .rename(columns={"mean": "mean_metric", "count": "observations"})
+    )
+
+    cells: List[Dict[str, object]] = []
+    for t in temp_order:
+        for r in rain_order:
+            row = grouped[(grouped["temp_regime"] == t) & (grouped["rain_regime"] == r)]
+            if row.empty:
+                cells.append(
+                    {
+                        "temp_regime": t,
+                        "rain_regime": r,
+                        "mean_metric": float("nan"),
+                        "observations": 0,
+                    }
+                )
+            else:
+                cells.append(
+                    {
+                        "temp_regime": t,
+                        "rain_regime": r,
+                        "mean_metric": _safe_float(row.iloc[0]["mean_metric"]),
+                        "observations": int(row.iloc[0]["observations"]),
+                    }
+                )
+
+    heatmap = []
+    for t in temp_order:
+        line = []
+        for r in rain_order:
+            match = next(
+                (
+                    c["mean_metric"]
+                    for c in cells
+                    if c["temp_regime"] == t and c["rain_regime"] == r
+                ),
+                float("nan"),
+            )
+            line.append(match)
+        heatmap.append(line)
+
+    observed_cells = [c for c in cells if c["observations"] > 0 and not math.isnan(_safe_float(c["mean_metric"]))]
+    best_regime = ""
+    worst_regime = ""
+    best_minus_worst = float("nan")
+    p_value = float("nan")
+    if len(observed_cells) >= 2:
+        best = max(observed_cells, key=lambda x: _safe_float(x["mean_metric"]))
+        worst = min(observed_cells, key=lambda x: _safe_float(x["mean_metric"]))
+        best_regime = f"{best['temp_regime']} / {best['rain_regime']}"
+        worst_regime = f"{worst['temp_regime']} / {worst['rain_regime']}"
+        best_minus_worst = _safe_float(best["mean_metric"]) - _safe_float(worst["mean_metric"])
+        best_values = valid[
+            (valid["temp_regime"] == best["temp_regime"]) & (valid["rain_regime"] == best["rain_regime"])
+        ]["metric"].astype(float).to_numpy()
+        worst_values = valid[
+            (valid["temp_regime"] == worst["temp_regime"]) & (valid["rain_regime"] == worst["rain_regime"])
+        ]["metric"].astype(float).to_numpy()
+        test = permutation_test_diff_means(best_values, worst_values)
+        p_value = test.p_value
+
+    return {
+        "available": True,
+        "temp_order": temp_order,
+        "rain_order": rain_order,
+        "cells": cells,
+        "heatmap": heatmap,
+        "best_regime": best_regime,
+        "worst_regime": worst_regime,
+        "best_minus_worst": best_minus_worst,
+        "p_value": p_value,
+        "metric": metric.value,
     }
