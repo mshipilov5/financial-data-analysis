@@ -13,7 +13,7 @@
     .metric { background: #f3f7ff; border-radius: 8px; padding: 12px; }
     .metric .label { font-size: 12px; color: #4b5563; }
     .metric .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
-    form { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; align-items: end; }
+    form { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; align-items: end; }
     input, button, select { width: 100%; padding: 8px; font-size: 14px; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th, td { border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; }
@@ -51,12 +51,6 @@
           {% endfor %}
         </select>
       </label>
-      <label>Луна: агрегация
-        <select name="lunar_mode">
-          <option value="equal_weight" {% if params.lunar_mode == 'equal_weight' %}selected{% endif %}>Равно-взвешенно по тикерам</option>
-          <option value="pooled" {% if params.lunar_mode == 'pooled' %}selected{% endif %}>Все наблюдения вместе</option>
-        </select>
-      </label>
       <button type="submit">Пересчитать</button>
     </form>
   </div>
@@ -69,28 +63,6 @@
   {% endif %}
 
   {% if has_data %}
-    <div class="card">
-      <h2>Краткие выводы</h2>
-      <div class="summary-grid">
-        <div class="metric">
-          <div class="label">Луна: лучшая фаза</div>
-          <div class="value">{{ lunar_effect.best_phase or '—' }}</div>
-        </div>
-        <div class="metric">
-          <div class="label">Луна: худшая фаза</div>
-          <div class="value">{{ lunar_effect.worst_phase or '—' }}</div>
-        </div>
-        <div class="metric">
-          <div class="label">Разница (лучшая − худшая)</div>
-          <div class="value" id="lunar-best-diff">—</div>
-        </div>
-        <div class="metric">
-          <div class="label">Permutation p-value</div>
-          <div class="value">{{ '%.4f'|format(lunar_effect.p_value) if lunar_effect.p_value == lunar_effect.p_value else '—' }}</div>
-        </div>
-      </div>
-    </div>
-
     <div class="card">
       <h2>Фильтры отображения</h2>
       <div class="filters">
@@ -133,6 +105,24 @@
 
     <div class="card">
       <h2>1) Фазы Луны</h2>
+      <div class="summary-grid">
+        <div class="metric">
+          <div class="label">Лучшая фаза</div>
+          <div class="value">{{ lunar_effect.best_phase or '—' }}</div>
+        </div>
+        <div class="metric">
+          <div class="label">Худшая фаза</div>
+          <div class="value">{{ lunar_effect.worst_phase or '—' }}</div>
+        </div>
+        <div class="metric">
+          <div class="label">Разница (лучшая − худшая)</div>
+          <div class="value" id="lunar-best-diff">—</div>
+        </div>
+        <div class="metric">
+          <div class="label">Permutation p-value</div>
+          <div class="value">{{ '%.4f'|format(lunar_effect.p_value) if lunar_effect.p_value == lunar_effect.p_value else '—' }}</div>
+        </div>
+      </div>
       <div id="chart-lunar" class="chart"></div>
       <div id="chart-lunar-summary" class="chart"></div>
       <table id="lunar-table">
@@ -169,7 +159,7 @@
           <tbody></tbody>
         </table>
       {% else %}
-        <p class="muted">Погодные данные недоступны для выбранного периода.</p>
+        <p class="muted">нет данных</p>
       {% endif %}
     </div>
 
@@ -370,7 +360,7 @@
             arrayminus: errMinus,
           },
         }], {
-          title: `Лунный эффект (${metricLabel}) — среднее по фазам + bootstrap CI (режим: ${lunarEffect.mode})`,
+          title: `Лунный эффект (${metricLabel}) — среднее по фазам + bootstrap CI`,
           yaxis: {tickformat: yAxisTick},
         });
       }

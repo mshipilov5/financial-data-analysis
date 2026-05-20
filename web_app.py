@@ -38,7 +38,6 @@ def index() -> str:
     end_raw = request.args.get("end", today.isoformat())
     max_tickers = int(request.args.get("max_tickers", 10))
     metric_raw = request.args.get("metric", AnalysisMetric.RETURN.value)
-    lunar_mode = request.args.get("lunar_mode", "equal_weight")
     try:
         metric = AnalysisMetric(metric_raw)
     except ValueError:
@@ -58,7 +57,6 @@ def index() -> str:
             "end": end.isoformat(),
             "max_tickers": max_tickers,
             "metric": metric.value,
-            "lunar_mode": lunar_mode,
         },
         "metric_options": [{"value": m.value, "label": METRIC_LABELS[m]} for m in AnalysisMetric],
         "has_data": False,
@@ -113,7 +111,7 @@ def index() -> str:
         sorted(weather_raw["rain_regime"].dropna().astype(str).unique().tolist()) if not weather_raw.empty else []
     )
 
-    lunar_effect = build_lunar_effect_summary(result.returns_df, metric=result.metric, mode=lunar_mode)
+    lunar_effect = build_lunar_effect_summary(result.returns_df, metric=result.metric)
     halloween_effect = build_halloween_effect_summary(
         result.returns_df,
         halloween_by_ticker=result.halloween_by_ticker,
