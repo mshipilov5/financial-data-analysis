@@ -89,10 +89,6 @@
           <div class="value">{{ '%.4f'|format(lunar_effect.p_value) if lunar_effect.p_value == lunar_effect.p_value else '—' }}</div>
         </div>
       </div>
-      <p class="muted" style="margin-top: 10px;">
-        <span class="pill">Идея</span> p-value получен простым перестановочным тестом между лучшей и худшей фазой.
-        Чем меньше p-value, тем менее вероятно, что разница случайна.
-      </p>
     </div>
 
     <div class="card">
@@ -147,7 +143,26 @@
 
     <div class="card">
       <h2>2) Погода vs {{ metric_label|lower }}</h2>
-      {% if weather_table %}
+      {% if weather_effect.available %}
+        <div class="summary-grid">
+          <div class="metric">
+            <div class="label">Лучший режим</div>
+            <div class="value">{{ weather_effect.best_regime or '—' }}</div>
+          </div>
+          <div class="metric">
+            <div class="label">Худший режим</div>
+            <div class="value">{{ weather_effect.worst_regime or '—' }}</div>
+          </div>
+          <div class="metric">
+            <div class="label">Разница (лучший − худший)</div>
+            <div class="value" id="weather-best-diff">—</div>
+          </div>
+          <div class="metric">
+            <div class="label">Permutation p-value</div>
+            <div class="value">{{ '%.4f'|format(weather_effect.p_value) if weather_effect.p_value == weather_effect.p_value else '—' }}</div>
+          </div>
+        </div>
+        <div id="chart-weather-heatmap" class="chart"></div>
         <div id="chart-weather" class="chart"></div>
         <table id="weather-table">
           <thead><tr><th>Тикер</th><th>Температура</th><th>Осадки</th><th>Среднее</th></tr></thead>
@@ -160,6 +175,29 @@
 
     <div class="card">
       <h2>3) Halloween effect по акциям</h2>
+      <div class="summary-grid">
+        <div class="metric">
+          <div class="label">Winter mean (Nov–Apr)</div>
+          <div class="value" id="halloween-winter-mean">—</div>
+        </div>
+        <div class="metric">
+          <div class="label">Summer mean (May–Oct)</div>
+          <div class="value" id="halloween-summer-mean">—</div>
+        </div>
+        <div class="metric">
+          <div class="label">Разница (winter − summer)</div>
+          <div class="value" id="halloween-diff">—</div>
+        </div>
+        <div class="metric">
+          <div class="label">Permutation p-value</div>
+          <div class="value">{{ '%.4f'|format(halloween_effect.p_value) if halloween_effect.p_value == halloween_effect.p_value else '—' }}</div>
+        </div>
+        <div class="metric">
+          <div class="label">Доля тикеров: winter > summer</div>
+          <div class="value">{{ '%.1f%%'|format(halloween_effect.share_winter_better * 100) if halloween_effect.share_winter_better == halloween_effect.share_winter_better else '—' }}</div>
+        </div>
+      </div>
+      <div id="chart-halloween-summary" class="chart"></div>
       <div id="chart-halloween" class="chart"></div>
       <table id="halloween-table">
         <thead>
@@ -186,6 +224,8 @@
     const metricKind = {{ metric_kind | tojson }};
     const metricLabel = {{ metric_label | tojson }};
     const lunarEffect = {{ lunar_effect | tojson }};
+    const halloweenEffect = {{ halloween_effect | tojson }};
+    const weatherEffect = {{ weather_effect | tojson }};
 
     function checkedValues(selector) {
       return Array.from(document.querySelectorAll(selector + ":checked")).map(x => x.value);
@@ -210,6 +250,22 @@
     const diffEl = document.getElementById("lunar-best-diff");
     if (diffEl && lunarEffect && lunarEffect.best_minus_worst === lunarEffect.best_minus_worst) {
       diffEl.textContent = fmtMetric(lunarEffect.best_minus_worst);
+    }
+    const hWinter = document.getElementById("halloween-winter-mean");
+    if (hWinter && halloweenEffect && halloweenEffect.winter_mean === halloweenEffect.winter_mean) {
+      hWinter.textContent = fmtMetric(halloweenEffect.winter_mean);
+    }
+    const hSummer = document.getElementById("halloween-summer-mean");
+    if (hSummer && halloweenEffect && halloweenEffect.summer_mean === halloweenEffect.summer_mean) {
+      hSummer.textContent = fmtMetric(halloweenEffect.summer_mean);
+    }
+    const hDiff = document.getElementById("halloween-diff");
+    if (hDiff && halloweenEffect && halloweenEffect.winter_minus_summer === halloweenEffect.winter_minus_summer) {
+      hDiff.textContent = fmtMetric(halloweenEffect.winter_minus_summer);
+    }
+    const wDiff = document.getElementById("weather-best-diff");
+    if (wDiff && weatherEffect && weatherEffect.best_minus_worst === weatherEffect.best_minus_worst) {
+      wDiff.textContent = fmtMetric(weatherEffect.best_minus_worst);
     }
 
     function renderTable(tableId, rows, cols) {
@@ -284,7 +340,7 @@
         type: "bar",
         x: halloweenChart.map(x => x.ticker),
         y: halloweenChart.map(x => x.total_return_diff),
-      }], { title: `Halloween effect (${metricLabel})`, yaxis: {tickformat: yAxisTick}});
+      }], { title: `Halloween effect (${metricLabel}) с учетом фильтра`, yaxis: {tickformat: yAxisTick}});
 
       if (weatherRaw.length) {
         const weatherChart = weatherRaw.filter(
@@ -296,8 +352,6 @@
           y: weatherChart.map(x => x.avg_metric),
         }], { title: `${metricLabel} по погодным режимам (фильтр)`, yaxis: {tickformat: yAxisTick}});
       }
-
-      // Unfiltered, research-style lunar summary (with CI)
       if (lunarEffect && lunarEffect.phases) {
         const phases = lunarEffect.phases;
         const x = phases.map(r => r.phase);
@@ -318,6 +372,33 @@
         }], {
           title: `Лунный эффект (${metricLabel}) — среднее по фазам + bootstrap CI (режим: ${lunarEffect.mode})`,
           yaxis: {tickformat: yAxisTick},
+        });
+      }
+
+      if (halloweenEffect && halloweenEffect.by_ticker && document.getElementById("chart-halloween-summary")) {
+        const sorted = [...halloweenEffect.by_ticker].sort((a, b) => b.avg_daily_return_diff - a.avg_daily_return_diff);
+        Plotly.newPlot("chart-halloween-summary", [{
+          type: "bar",
+          x: sorted.map(x => x.ticker),
+          y: sorted.map(x => x.avg_daily_return_diff),
+        }], {
+          title: `Halloween effect (${metricLabel}) по всем тикерам`,
+          yaxis: {tickformat: yAxisTick},
+        });
+      }
+
+      if (weatherEffect && weatherEffect.available && document.getElementById("chart-weather-heatmap")) {
+        Plotly.newPlot("chart-weather-heatmap", [{
+          type: "heatmap",
+          x: weatherEffect.rain_order,
+          y: weatherEffect.temp_order,
+          z: weatherEffect.heatmap,
+          colorscale: "RdBu",
+          reversescale: true,
+        }], {
+          title: `Погода и ${metricLabel.toLowerCase()} по всем тикерам`,
+          xaxis: {title: "Осадки"},
+          yaxis: {title: "Температура"},
         });
       }
     }

@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from flask import Flask, render_template, request
 
 from analysis_core import METRIC_LABELS, AnalysisMetric, run_analysis
-from analysis_stats import build_lunar_effect_summary
+from analysis_stats import build_halloween_effect_summary, build_lunar_effect_summary, build_weather_effect_summary
 
 app = Flask(__name__)
 logger = logging.getLogger("moex_web")
@@ -114,6 +114,12 @@ def index() -> str:
     )
 
     lunar_effect = build_lunar_effect_summary(result.returns_df, metric=result.metric, mode=lunar_mode)
+    halloween_effect = build_halloween_effect_summary(
+        result.returns_df,
+        halloween_by_ticker=result.halloween_by_ticker,
+        metric=result.metric,
+    )
+    weather_effect = build_weather_effect_summary(result.returns_df, metric=result.metric)
 
     context.update(
         {
@@ -139,6 +145,8 @@ def index() -> str:
             "temp_options": temp_options,
             "rain_options": rain_options,
             "lunar_effect": lunar_effect,
+            "halloween_effect": halloween_effect,
+            "weather_effect": weather_effect,
         }
     )
     return render_template("index.html", **context)
