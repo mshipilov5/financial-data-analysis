@@ -340,7 +340,7 @@
         type: "bar",
         x: halloweenChart.map(x => x.ticker),
         y: halloweenChart.map(x => x.total_return_diff),
-      }], { title: `Halloween effect (${metricLabel}) по фильтру`, yaxis: {tickformat: yAxisTick}});
+      }], { title: `Halloween effect (${metricLabel}) с учетом фильтра`, yaxis: {tickformat: yAxisTick}});
 
       if (weatherRaw.length) {
         const weatherChart = weatherRaw.filter(
