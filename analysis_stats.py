@@ -86,38 +86,12 @@ def permutation_test_diff_means(
     return PermutationTestResult(observed_diff=observed, p_value=p_value)
 
 
-def aggregate_by_group_equal_weight(
-    df: pd.DataFrame,
-    group_col: str,
-    metric_col: str = "metric",
-    ticker_col: str = "ticker",
-) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(columns=[group_col, "mean", "tickers"])
-
-    per_ticker = (
-        df.groupby([ticker_col, group_col], as_index=False)[metric_col]
-        .mean()
-        .rename(columns={metric_col: "ticker_mean"})
-    )
-
-    out = (
-        per_ticker.groupby(group_col, as_index=False)
-        .agg(mean=("ticker_mean", "mean"), tickers=(ticker_col, "nunique"))
-        .sort_values(group_col)
-        .reset_index(drop=True)
-    )
-    return out
-
-
 def build_lunar_effect_summary(
     returns_df: pd.DataFrame,
     metric: AnalysisMetric,
-    mode: str = "equal_weight",
 ) -> Dict[str, object]:
     if returns_df.empty:
         return {
-            "mode": mode,
             "phases": [],
             "best_phase": "",
             "worst_phase": "",
@@ -127,40 +101,23 @@ def build_lunar_effect_summary(
 
     frame = returns_df.dropna(subset=["phase", "metric"]).copy()
     frame["phase"] = pd.Categorical(frame["phase"].astype(str), categories=PHASE_ORDER, ordered=True)
-
-    if mode == "equal_weight":
-        per_ticker = (
-            frame.groupby(["ticker", "phase"], as_index=False)["metric"].mean().rename(columns={"metric": "x"})
+    per_ticker = (
+        frame.groupby(["ticker", "phase"], as_index=False)["metric"].mean().rename(columns={"metric": "x"})
+    )
+    rows = []
+    for phase in PHASE_ORDER:
+        x = per_ticker.loc[per_ticker["phase"] == phase, "x"].astype(float).to_numpy()
+        ci_low, ci_high = bootstrap_ci_mean(x)
+        mean = _safe_float(np.nanmean(x))
+        rows.append(
+            {
+                "phase": phase,
+                "mean": mean,
+                "ci_low": ci_low,
+                "ci_high": ci_high,
+                "observations": int(np.sum(~np.isnan(x))),
+            }
         )
-        rows = []
-        for phase in PHASE_ORDER:
-            x = per_ticker.loc[per_ticker["phase"] == phase, "x"].astype(float).to_numpy()
-            ci_low, ci_high = bootstrap_ci_mean(x)
-            mean = _safe_float(np.nanmean(x))
-            rows.append(
-                {
-                    "phase": phase,
-                    "mean": mean,
-                    "ci_low": ci_low,
-                    "ci_high": ci_high,
-                    "observations": int(np.sum(~np.isnan(x))),
-                }
-            )
-    else:
-        grouped = frame.groupby("phase")["metric"]
-        rows = []
-        for phase in PHASE_ORDER:
-            x = grouped.get_group(phase).astype(float).to_numpy() if phase in grouped.groups else np.array([])
-            ci_low, ci_high = bootstrap_ci_mean(x)
-            rows.append(
-                {
-                    "phase": phase,
-                    "mean": _safe_float(np.nanmean(x)),
-                    "ci_low": ci_low,
-                    "ci_high": ci_high,
-                    "observations": int(np.sum(~np.isnan(x))),
-                }
-            )
 
     valid_rows = [r for r in rows if not math.isnan(_safe_float(r["mean"]))]
     best_phase = ""
@@ -174,13 +131,12 @@ def build_lunar_effect_summary(
         best_phase = str(best["phase"])
         worst_phase = str(worst["phase"])
         best_minus_worst = _safe_float(best["mean"]) - _safe_float(worst["mean"])
-        a = frame.loc[frame["phase"] == best_phase, "metric"].astype(float).to_numpy()
-        b = frame.loc[frame["phase"] == worst_phase, "metric"].astype(float).to_numpy()
+        a = per_ticker.loc[per_ticker["phase"] == best_phase, "x"].astype(float).to_numpy()
+        b = per_ticker.loc[per_ticker["phase"] == worst_phase, "x"].astype(float).to_numpy()
         test = permutation_test_diff_means(a, b)
         p_value = test.p_value
 
     return {
-        "mode": mode,
         "metric": metric.value,
         "phases": rows,
         "best_phase": best_phase,
@@ -208,23 +164,16 @@ def build_halloween_effect_summary(
             "metric": metric.value,
         }
 
-    frame = returns_df.dropna(subset=["date", "metric"]).copy()
-    month = pd.to_datetime(frame["date"]).dt.month
-    frame["season"] = np.where(
-        month.isin([11, 12, 1, 2, 3, 4]),
-        "Winter (Nov-Apr)",
-        "Summer (May-Oct)",
+    by_ticker_df = halloween_by_ticker.copy()
+    by_ticker_df = by_ticker_df.dropna(
+        subset=["ticker", "winter_avg_daily_return", "summer_avg_daily_return", "avg_daily_return_diff"]
     )
-
-    winter = frame.loc[frame["season"] == "Winter (Nov-Apr)", "metric"].astype(float).to_numpy()
-    summer = frame.loc[frame["season"] == "Summer (May-Oct)", "metric"].astype(float).to_numpy()
+    by_ticker_df = by_ticker_df.sort_values("ticker")
+    winter = by_ticker_df["winter_avg_daily_return"].astype(float).to_numpy()
+    summer = by_ticker_df["summer_avg_daily_return"].astype(float).to_numpy()
     winter_mean = _safe_float(np.nanmean(winter))
     summer_mean = _safe_float(np.nanmean(summer))
     test = permutation_test_diff_means(winter, summer)
-
-    by_ticker_df = halloween_by_ticker.copy()
-    by_ticker_df = by_ticker_df.dropna(subset=["ticker", "avg_daily_return_diff"])
-    by_ticker_df = by_ticker_df.sort_values("ticker")
     tickers_total = int(len(by_ticker_df))
     tickers_winter_better = int((by_ticker_df["avg_daily_return_diff"] > 0).sum()) if tickers_total else 0
     share_winter_better = (
@@ -293,10 +242,15 @@ def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetri
         }
 
     grouped = (
-        valid.groupby(["temp_regime", "rain_regime"], as_index=False)["metric"]
+        valid.groupby(["ticker", "temp_regime", "rain_regime"], as_index=False)["metric"]
         .agg(["mean", "count"])
         .reset_index()
-        .rename(columns={"mean": "mean_metric", "count": "observations"})
+        .rename(columns={"mean": "ticker_mean", "count": "ticker_observations"})
+    )
+    grouped = (
+        grouped.groupby(["temp_regime", "rain_regime"], as_index=False)
+        .agg(mean_metric=("ticker_mean", "mean"), tickers=("ticker_mean", "count"))
+        .reset_index(drop=True)
     )
 
     cells: List[Dict[str, object]] = []
@@ -309,7 +263,7 @@ def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetri
                         "temp_regime": t,
                         "rain_regime": r,
                         "mean_metric": float("nan"),
-                        "observations": 0,
+                        "tickers": 0,
                     }
                 )
             else:
@@ -318,7 +272,7 @@ def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetri
                         "temp_regime": t,
                         "rain_regime": r,
                         "mean_metric": _safe_float(row.iloc[0]["mean_metric"]),
-                        "observations": int(row.iloc[0]["observations"]),
+                        "tickers": int(row.iloc[0]["tickers"]),
                     }
                 )
 
@@ -337,7 +291,7 @@ def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetri
             line.append(match)
         heatmap.append(line)
 
-    observed_cells = [c for c in cells if c["observations"] > 0 and not math.isnan(_safe_float(c["mean_metric"]))]
+    observed_cells = [c for c in cells if c["tickers"] > 0 and not math.isnan(_safe_float(c["mean_metric"]))]
     best_regime = ""
     worst_regime = ""
     best_minus_worst = float("nan")
