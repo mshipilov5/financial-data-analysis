@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from flask import Flask, render_template, request
 
 from analysis_core import METRIC_LABELS, AnalysisMetric, run_analysis
+from analysis_stats import build_lunar_effect_summary
 
 app = Flask(__name__)
 logger = logging.getLogger("moex_web")
@@ -37,6 +38,7 @@ def index() -> str:
     end_raw = request.args.get("end", today.isoformat())
     max_tickers = int(request.args.get("max_tickers", 10))
     metric_raw = request.args.get("metric", AnalysisMetric.RETURN.value)
+    lunar_mode = request.args.get("lunar_mode", "equal_weight")
     try:
         metric = AnalysisMetric(metric_raw)
     except ValueError:
@@ -56,10 +58,9 @@ def index() -> str:
             "end": end.isoformat(),
             "max_tickers": max_tickers,
             "metric": metric.value,
+            "lunar_mode": lunar_mode,
         },
-        "metric_options": [
-            {"value": m.value, "label": METRIC_LABELS[m]} for m in AnalysisMetric
-        ],
+        "metric_options": [{"value": m.value, "label": METRIC_LABELS[m]} for m in AnalysisMetric],
         "has_data": False,
         "error_message": "",
         "intro_message": "Нажмите 'Пересчитать', чтобы запустить анализ.",
@@ -74,27 +75,19 @@ def index() -> str:
         return render_template("index.html", **context)
 
     try:
-        result = run_analysis(
-            start=start, end=end, max_tickers=max_tickers, metric=metric, logger=logger
-        )
+        result = run_analysis(start=start, end=end, max_tickers=max_tickers, metric=metric, logger=logger)
     except Exception as exc:  # noqa: BLE001
         context["error_message"] = f"Ошибка расчета: {exc}"
         context["intro_message"] = ""
         return render_template("index.html", **context)
 
     lunar_table = result.lunar_stats.copy()
-    lunar_table["mean_metric"] = lunar_table["mean_metric"].map(
-        lambda v: _fmt_metric(v, result.metric)
-    )
-    lunar_table["median_metric"] = lunar_table["median_metric"].map(
-        lambda v: _fmt_metric(v, result.metric)
-    )
+    lunar_table["mean_metric"] = lunar_table["mean_metric"].map(lambda v: _fmt_metric(v, result.metric))
+    lunar_table["median_metric"] = lunar_table["median_metric"].map(lambda v: _fmt_metric(v, result.metric))
 
     weather_table = result.weather_stats.copy()
     if not weather_table.empty:
-        weather_table["avg_metric"] = weather_table["avg_metric"].map(
-            lambda v: _fmt_metric(v, result.metric)
-        )
+        weather_table["avg_metric"] = weather_table["avg_metric"].map(lambda v: _fmt_metric(v, result.metric))
 
     halloween_table = result.halloween_by_ticker.copy()
     for col in [
@@ -114,15 +107,13 @@ def index() -> str:
     ticker_options = sorted(result.returns_df["ticker"].dropna().unique().tolist())
     phase_options = ["New Moon", "Waxing", "Full Moon", "Waning"]
     temp_options = (
-        sorted(weather_raw["temp_regime"].dropna().astype(str).unique().tolist())
-        if not weather_raw.empty
-        else []
+        sorted(weather_raw["temp_regime"].dropna().astype(str).unique().tolist()) if not weather_raw.empty else []
     )
     rain_options = (
-        sorted(weather_raw["rain_regime"].dropna().astype(str).unique().tolist())
-        if not weather_raw.empty
-        else []
+        sorted(weather_raw["rain_regime"].dropna().astype(str).unique().tolist()) if not weather_raw.empty else []
     )
+
+    lunar_effect = build_lunar_effect_summary(result.returns_df, metric=result.metric, mode=lunar_mode)
 
     context.update(
         {
@@ -147,6 +138,7 @@ def index() -> str:
             "phase_options": phase_options,
             "temp_options": temp_options,
             "rain_options": rain_options,
+            "lunar_effect": lunar_effect,
         }
     )
     return render_template("index.html", **context)
