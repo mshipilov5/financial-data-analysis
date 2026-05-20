@@ -4,3 +4,4 @@ numpy
 requests
 urllib3<2
 astral
+python-dateutil
