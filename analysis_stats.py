@@ -165,7 +165,9 @@ def build_halloween_effect_summary(
         }
 
     by_ticker_df = halloween_by_ticker.copy()
-    by_ticker_df = by_ticker_df.dropna(subset=["ticker", "winter_avg_daily_return", "summer_avg_daily_return"])
+    by_ticker_df = by_ticker_df.dropna(
+        subset=["ticker", "winter_avg_daily_return", "summer_avg_daily_return", "avg_daily_return_diff"]
+    )
     by_ticker_df = by_ticker_df.sort_values("ticker")
     winter = by_ticker_df["winter_avg_daily_return"].astype(float).to_numpy()
     summer = by_ticker_df["summer_avg_daily_return"].astype(float).to_numpy()
@@ -247,7 +249,7 @@ def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetri
     )
     grouped = (
         grouped.groupby(["temp_regime", "rain_regime"], as_index=False)
-        .agg(mean_metric=("ticker_mean", "mean"), observations=("ticker_mean", "count"))
+        .agg(mean_metric=("ticker_mean", "mean"), tickers=("ticker_mean", "count"))
         .reset_index(drop=True)
     )
 
@@ -261,7 +263,7 @@ def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetri
                         "temp_regime": t,
                         "rain_regime": r,
                         "mean_metric": float("nan"),
-                        "observations": 0,
+                        "tickers": 0,
                     }
                 )
             else:
@@ -270,7 +272,7 @@ def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetri
                         "temp_regime": t,
                         "rain_regime": r,
                         "mean_metric": _safe_float(row.iloc[0]["mean_metric"]),
-                        "observations": int(row.iloc[0]["observations"]),
+                        "tickers": int(row.iloc[0]["tickers"]),
                     }
                 )
 
@@ -289,7 +291,7 @@ def build_weather_effect_summary(returns_df: pd.DataFrame, metric: AnalysisMetri
             line.append(match)
         heatmap.append(line)
 
-    observed_cells = [c for c in cells if c["observations"] > 0 and not math.isnan(_safe_float(c["mean_metric"]))]
+    observed_cells = [c for c in cells if c["tickers"] > 0 and not math.isnan(_safe_float(c["mean_metric"]))]
     best_regime = ""
     worst_regime = ""
     best_minus_worst = float("nan")
