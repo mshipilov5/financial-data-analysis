@@ -22,7 +22,7 @@ class PermutationTestResult:
 def _safe_float(value: float | int | np.floating | np.integer) -> float:
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return float("nan")
 
 
